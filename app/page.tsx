@@ -1,32 +1,21 @@
 "use client"
 
 import { useState, useEffect, useRef, useCallback } from "react"
-import { StorageManager } from "@/lib/storage"
 import { Tournament } from "@/lib/tournament"
 import { DateUtils } from "@/lib/date-utils"
-import { SoundManager } from "@/lib/sound-manager"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card } from "@/components/ui/card"
 
-import { StatsChartSection } from "@/components/stats-chart-section"
+import { StatsChart } from "@/components/stats-chart"
 import { PodiumIllustration } from "@/components/podium-illustration"
-import {
-  getSupabaseMatchHistory,
-  addSupabaseMatch,
-  clearSupabaseHistory,
-  // addSupabaseTournament, // Импортируем новую функцию
-  // getSupabaseTournamentHistory, // Импортируем новую функцию
-  // clearSupabaseTournamentHistory, // Импортируем новую функцию
-} from "@/app/actions"
-import { TutorialModal } from "@/components/tutorial-modal" // Import the new component
+import { TutorialModal } from "@/components/tutorial-modal"
 
 type Screen = "setup" | "match" | "results"
 
-// Обновленный интерфейс MatchRecord для клиента
 interface MatchRecord {
-  id: string // Добавляем id, так как он возвращается из Supabase
+  id: string
   date: string
   title: string
   winner: string
@@ -35,21 +24,10 @@ interface MatchRecord {
   loserScore: number
 }
 
-// Новый интерфейс TournamentRecord для клиента
-interface TournamentRecord {
-  id: string
-  date: string
-  winner: string
-  secondPlace: string
-  thirdPlace: string
-}
-
 export default function Home() {
-  const storageManagerRef = useRef(new StorageManager())
   const tournamentRef = useRef(new Tournament())
-  const soundManagerRef = useRef(new SoundManager())
 
-  const [playerNames, setPlayerNamesState] = useState<string[]>(["Игрок 1", "Игрок 2", "Игрок 3"])
+  const [playerNames, setPlayerNames] = useState<string[]>(["Игрок 1", "Игрок 2", "Игрок 3"])
   const [currentScreen, setCurrentScreen] = useState<Screen>("setup")
   const [currentMatchInfo, setCurrentMatchInfo] = useState<{
     title: string
@@ -63,55 +41,44 @@ export default function Home() {
     third: string
   } | null>(null)
   const [scores, setScores] = useState<[number, number]>([0, 0])
-  const [matchHistory, setMatchHistory] = useState<MatchRecord[]>([]) // Используем обновленный тип
-  // const [tournamentHistory, setTournamentHistory] = useState<TournamentRecord[]>([]) // Новое состояние для истории турниров
+  const [matchHistory, setMatchHistory] = useState<MatchRecord[]>([])
   const [dateFilter, setDateFilter] = useState<string>("")
-  const [isLoadingMatchHistory, setIsLoadingMatchHistory] = useState(true) // Переименовано для ясности
-  // const [isLoadingTournamentHistory, setIsLoadingTournamentHistory] = useState(true) // Новое состояние загрузки
-  const [showTutorialModal, setShowTutorialModal] = useState(false) // New state for tutorial modal
+  const [showTutorialModal, setShowTutorialModal] = useState(false)
 
-  const setPlayerNames = useCallback((newNames: string[]) => {
-    setPlayerNamesState(newNames)
-    storageManagerRef.current.savePlayerNames(newNames)
+  // Load match history from localStorage on component mount
+  useEffect(() => {
+    const savedHistory = localStorage.getItem('billiards_match_history')
+    if (savedHistory) {
+      try {
+        const parsedHistory = JSON.parse(savedHistory)
+        setMatchHistory(parsedHistory.map((match: any, index: number) => ({
+          ...match,
+          id: match.id || `match-${index}-${Date.now()}`
+        })))
+      } catch (error) {
+        console.error('Error loading match history:', error)
+      }
+    }
   }, [])
 
-  const loadMatchHistory = useCallback(async () => {
-    setIsLoadingMatchHistory(true)
+  // Save match history to localStorage whenever it changes
+  const saveMatchHistory = useCallback((history: MatchRecord[]) => {
     try {
-      const history = await getSupabaseMatchHistory()
-      setMatchHistory(history)
+      localStorage.setItem('billiards_match_history', JSON.stringify(history))
     } catch (error) {
-      console.error("Failed to load match history:", error)
-      setMatchHistory([])
-    } finally {
-      setIsLoadingMatchHistory(false)
+      console.error('Error saving match history:', error)
     }
   }, [])
 
-  // const loadTournamentHistory = useCallback(async () => {
-  //   setIsLoadingTournamentHistory(true)
-  //   try {
-  //     const history = await getSupabaseTournamentHistory()
-  //     setTournamentHistory(history)
-  //   } catch (error) {
-  //     console.error("Failed to load tournament history:", error)
-  //     setTournamentHistory([])
-  //   } finally {
-  //     setIsLoadingTournamentHistory(false)
-  //   }
-  // }, [])
-
-  useEffect(() => {
-    loadMatchHistory()
-    // loadTournamentHistory() // Загружаем историю турниров при монтировании
-  }, [loadMatchHistory])
-
-  useEffect(() => {
-    const savedNames = storageManagerRef.current.getPlayerNames()
-    if (savedNames) {
-      setPlayerNamesState(savedNames)
+  const addMatchToHistory = useCallback((matchRecord: any) => {
+    const newMatch: MatchRecord = {
+      id: `match-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      ...matchRecord
     }
-  }, [])
+    const updatedHistory = [newMatch, ...matchHistory]
+    setMatchHistory(updatedHistory)
+    saveMatchHistory(updatedHistory)
+  }, [matchHistory, saveMatchHistory])
 
   const getPlayersForChart = useCallback(() => {
     if (currentScreen === "setup" || currentScreen === "results") {
@@ -123,145 +90,70 @@ export default function Home() {
     return []
   }, [currentScreen, playerNames, currentMatchInfo])
 
-  const getPlayerStats = useCallback(
-    (players: string[]) => {
-      const allMatches = matchHistory
-      const stats: { [key: string]: { wins: number; losses: number; totalMatches: number; winDates: string[] } } = {}
-
-      players.forEach((player) => {
-        if (player) {
-          stats[player] = {
-            wins: 0,
-            losses: 0,
-            totalMatches: 0,
-            winDates: [],
-          }
-        }
-      })
-
-      allMatches.forEach((match) => {
-        // Используем новые поля winner и loser
-        if (match.winner && match.loser && match.winnerScore !== undefined && match.loserScore !== undefined) {
-          const winnerInList = players.includes(match.winner)
-          const loserInList = players.includes(match.loser)
-
-          if (winnerInList || loserInList) {
-            if (stats[match.winner]) {
-              stats[match.winner].wins++
-              stats[match.winner].totalMatches++
-              if (match.date) {
-                stats[match.winner].winDates.push(match.date)
-              }
-            }
-
-            if (stats[match.loser]) {
-              stats[match.loser].losses++
-              stats[match.loser].totalMatches++
-            }
-          }
-        }
-      })
-      return stats
-    },
-    [matchHistory],
-  )
-
-  const handleStartTournament = useCallback(async () => {
+  const handleStartTournament = useCallback(() => {
     try {
-      soundManagerRef.current.playButtonClickSound()
       const trimmedPlayerNames = playerNames.map((name) => name.trim())
       const matchInfo = tournamentRef.current.startTournament(trimmedPlayerNames)
       setCurrentMatchInfo(matchInfo)
       setScores(matchInfo.scores)
       setCurrentScreen("match")
-      soundManagerRef.current.playStartSound()
-      await loadMatchHistory()
-      // await loadTournamentHistory() // Обновляем историю турниров
     } catch (error: any) {
       alert(error.message)
     }
-  }, [playerNames, loadMatchHistory])
+  }, [playerNames])
 
   const handleAddPoint = useCallback((playerNumber: 1 | 2) => {
-    soundManagerRef.current.playPointSound()
     tournamentRef.current.addPoint(playerNumber)
     setScores(tournamentRef.current.getScores())
   }, [])
 
   const handleSubtractPoint = useCallback((playerNumber: 1 | 2) => {
-    soundManagerRef.current.playPointSound()
     tournamentRef.current.subtractPoint(playerNumber)
     setScores(tournamentRef.current.getScores())
   }, [])
 
-  const handleEndMatch = useCallback(async () => {
+  const handleEndMatch = useCallback(() => {
     try {
-      soundManagerRef.current.playButtonClickSound()
       const result = tournamentRef.current.endMatch()
-      await addSupabaseMatch(result.matchRecord) // Сохраняем запись матча
+      addMatchToHistory(result.matchRecord)
 
       if (result.completed) {
         setTournamentResults(result.results)
         setCurrentScreen("results")
-        soundManagerRef.current.playWinSound()
-        // Сохраняем результаты турнира в новую таблицу
-        // if (result.results) {
-        //   await addSupabaseTournament(result.results)
-        // }
       } else {
         setCurrentMatchInfo(result.nextMatch)
         setScores(result.nextMatch.scores)
         setCurrentScreen("match")
       }
-      await loadMatchHistory()
-      // await loadTournamentHistory() // Обновляем историю турниров
     } catch (error: any) {
       alert(error.message)
-      soundManagerRef.current.playLoseSound()
     }
-  }, [loadMatchHistory])
+  }, [addMatchToHistory])
 
-  const handleResetTournament = useCallback(async () => {
-    soundManagerRef.current.playButtonClickSound()
+  const handleResetTournament = useCallback(() => {
     tournamentRef.current.reset()
     setScores([0, 0])
     setCurrentMatchInfo(null)
     setTournamentResults(null)
     setCurrentScreen("setup")
-    soundManagerRef.current.playResetSound()
-    await loadMatchHistory()
-    // await loadTournamentHistory() // Обновляем историю турниров
     setDateFilter("")
-  }, [loadMatchHistory])
+  }, [])
 
-  const handleClearMatchHistory = useCallback(async () => {
-    soundManagerRef.current.playButtonClickSound()
+  const handleClearMatchHistory = useCallback(() => {
     if (confirm("Вы уверены, что хотите очистить историю матчей?")) {
-      await clearSupabaseHistory()
-      await loadMatchHistory()
+      setMatchHistory([])
+      saveMatchHistory([])
       setDateFilter("")
-      soundManagerRef.current.playResetSound()
     }
-  }, [loadMatchHistory])
-
-  // const handleClearTournamentHistory = useCallback(async () => {
-  //   soundManagerRef.current.playButtonClickSound()
-  //   if (confirm("Вы уверены, что хотите очистить историю турниров?")) {
-  //     await clearSupabaseTournamentHistory()
-  //     await loadTournamentHistory()
-  //     soundManagerRef.current.playResetSound()
-  //   }
-  // }, [loadTournamentHistory])
+  }, [saveMatchHistory])
 
   const filteredMatchHistory = matchHistory.filter((match) =>
-    dateFilter ? DateUtils.matchesDateFilter(match.date, dateFilter) : true,
+    dateFilter ? DateUtils.matchesDateFilter(match.date, dateFilter) : true
   )
 
   const formatMatchEntry = (match: MatchRecord) => {
-    // Используем новые поля winner и loser
     const winnerClass = "text-yellow-400 font-semibold"
-    const loserClass = "" // Проигравший не получает специальный класс
-
+    
     return (
       <div className="flex flex-col gap-1">
         <div className="text-xs text-white/80 font-medium opacity-80">{match.date}</div>
@@ -271,24 +163,13 @@ export default function Home() {
             {match.winner} ({match.winnerScore})
           </span>
           <span className="text-white/70 text-xs opacity-70">vs</span>
-          <span className={loserClass}>
+          <span>
             {match.loser} ({match.loserScore})
           </span>
         </div>
       </div>
     )
   }
-
-  // const formatTournamentEntry = (tournament: TournamentRecord) => {
-  //   return (
-  //     <div className="flex flex-col gap-1">
-  //       <div className="text-xs text-white/80 font-medium opacity-80">{tournament.date}</div>
-  //       <div className="font-semibold text-yellow-400 text-base">🏆 Победитель: {tournament.winner}</div>
-  //       <div className="text-sm text-white/90">🥈 2 место: {tournament.secondPlace}</div>
-  //       <div className="text-sm text-white/90">🥉 3 место: {tournament.thirdPlace}</div>
-  //     </div>
-  //   )
-  // }
 
   return (
     <div className="container">
@@ -331,7 +212,7 @@ export default function Home() {
               Начать турнир
             </Button>
             <Button
-              onClick={() => setShowTutorialModal(true)} // Button to open tutorial
+              onClick={() => setShowTutorialModal(true)}
               className="bg-gradient-to-br from-purple-500 to-purple-700 hover:from-purple-600 hover:to-purple-800 text-white font-semibold py-3 px-6 rounded-lg shadow-lg transition-all duration-300 ease-in-out hover:scale-105"
             >
               Правила игры
@@ -423,28 +304,17 @@ export default function Home() {
             onClick={handleClearMatchHistory}
             className="bg-gradient-to-br from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold py-2 px-4 rounded-md text-sm"
           >
-            Очистить историю матчей
+            Очистить историю
           </Button>
         </div>
         <ul id="match-history" className="list-none max-h-[200px] overflow-y-auto pr-2">
-          {isLoadingMatchHistory ? (
-            <li className="text-white/60 italic text-sm">Загрузка истории матчей...</li>
-          ) : filteredMatchHistory.length === 0 ? (
+          {filteredMatchHistory.length === 0 ? (
             <li className="text-white/60 italic text-sm">История матчей пуста</li>
           ) : (
-            filteredMatchHistory.map((match, index) => (
+            filteredMatchHistory.map((match) => (
               <li
-                key={match.id || index} // Используем id матча, если доступен
+                key={match.id}
                 className="bg-white/15 p-3 my-1 rounded-md border-l-4 border-green-500 text-sm transition-all duration-300 ease-in-out hover:bg-white/20 hover:translate-x-1 hover:border-yellow-400 hover:shadow-md cursor-pointer"
-                onMouseEnter={() => {
-                  // This is where you'd update the chart for specific match players
-                  // For now, we'll just pass the current tournament players to the chart
-                  // The original logic for hover-specific chart updates is more complex
-                  // and would require passing a specific `updateChart` function from here.
-                }}
-                onMouseLeave={() => {
-                  // Reset chart to default players
-                }}
               >
                 {formatMatchEntry(match)}
               </li>
@@ -453,18 +323,14 @@ export default function Home() {
         </ul>
       </div>
 
-      {/* New Tournament History Section */}
-
       <div id="stats" className="bg-white/10 p-6 rounded-xl my-5 relative transition-all duration-300 ease-in-out">
         <h3 className="text-xl font-semibold mb-4 text-yellow-400 text-center">Статистика побед</h3>
-        <StatsChartSection
+        <StatsChart
           players={getPlayersForChart()}
-          playerStats={getPlayerStats(getPlayersForChart())}
           matchHistory={matchHistory}
         />
       </div>
 
-      {/* Tutorial Modal */}
       <TutorialModal isOpen={showTutorialModal} onClose={() => setShowTutorialModal(false)} />
     </div>
   )
